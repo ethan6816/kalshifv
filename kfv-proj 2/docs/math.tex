@@ -1,0 +1,303 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{booktabs}
+
+\title{A Fair Value Engine for Kalshi Sports Markets:\\
+\large Binary Option Pricing via Brownian Motion}
+\author{}
+\date{\today}
+
+\newtheorem{proposition}{Proposition}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Kalshi event contracts settle at \$1 if an event occurs and \$0 otherwise,
+which makes them mathematically identical to cash-or-nothing binary options.
+This document derives a fair value model for Kalshi ``team X wins'' game
+markets in two layers: a pre-game Elo-based prior, and an in-game model
+where the score margin is treated as a Brownian motion and the win
+probability follows directly from the distribution of its terminal value.
+We then use this fair value to define market edge and size positions via
+the Kelly criterion. Every result here follows from undergraduate
+probability: the CDF of the normal distribution, elementary properties of
+Brownian motion, and Kelly's log-utility argument.
+\end{abstract}
+
+\section{Kalshi contracts as binary options}
+
+A Kalshi ``YES'' contract on an event $E$ pays
+\[
+\text{Payoff} =
+\begin{cases}
+\$1 & \text{if } E \text{ occurs} \\
+\$0 & \text{otherwise}
+\end{cases}
+\]
+Under the assumption of no arbitrage and risk-neutral pricing, the fair
+price of this contract today is
+\[
+V_0 = e^{-r\tau}\,\mathbb{E}^{\mathbb{Q}}\!\left[\mathbf{1}_E\right]
+    = e^{-r\tau}\, \mathbb{Q}(E),
+\]
+where $\mathbb{Q}$ is the risk-neutral measure and $\tau$ is the (typically
+short, hours-to-days) time to settlement. Because $\tau$ is small for a
+single game, $e^{-r\tau}\approx 1$, so
+\[
+V_0 \approx \mathbb{Q}(E).
+\]
+This is the key fact that makes Kalshi different from a normal asset: the
+\emph{price itself} is (approximately) a probability. A market quote of
+63\textcent{} is a direct claim: ``the market believes there is a 63\%
+chance of $E$.'' Our entire project is about producing an independent
+estimate of $\mathbb{Q}(E)$ (call it $p_{\text{model}}$) and comparing it to
+the market's implied estimate $p_{\text{market}} = V_0$.
+
+\section{Layer 1: pre-game probability via Elo ratings}
+
+Before a game starts, we need a prior belief about each team's strength.
+The Elo system (originally designed for chess) gives each team $i$ a
+rating $R_i \in \mathbb{R}$, and converts a rating difference into a win
+probability via the logistic function:
+\[
+p_{\text{home}} = \frac{1}{1 + 10^{-(R_{\text{home}} + H - R_{\text{away}})/400}}
+\]
+where $H$ is a fixed home-field-advantage bonus (in rating points). After
+each game, ratings update toward the observed outcome:
+\[
+R_{\text{home}}' = R_{\text{home}} + K\big(S_{\text{home}} - p_{\text{home}}\big),
+\qquad S_{\text{home}} \in \{0, 1\}
+\]
+This is a simple stochastic approximation / gradient update: it nudges the
+rating in the direction of the surprise $(S - p)$, scaled by learning rate
+$K$. Elo can be derived formally as an online logistic regression with a
+single feature (rating difference) updated by gradient descent on the log
+loss, which is worth knowing but not required to use it. In this project
+Elo supplies the \textbf{prior} at kickoff ($\tau = 1$ below); the in-game
+model in Section 3 is what does the interesting stochastic work.
+
+\section{Layer 2: in-game probability via Brownian motion (Stern 1994)}
+
+\subsection{Model setup}
+
+Let $M(t)$ denote the point margin (home score minus away score) at time
+$t$ during the game, and let $\tau(t) \in (0, 1]$ denote the \emph{fraction
+of the game remaining} at time $t$ (so $\tau = 1$ at kickoff and $\tau \to
+0$ at the final whistle).
+
+\textbf{Assumption.} The margin process behaves like a driftless Brownian
+motion in ``fraction-of-game-remaining'' time:
+\[
+M(t) - M(t_0) \;\sim\; \mathcal{N}\!\big(0,\ \sigma^2 (\tau_0 - \tau)\big)
+\]
+for $t > t_0$, where $\sigma^2$ is a fixed volatility parameter (units:
+points$^2$ per full game).
+
+\textbf{Why this is a reasonable approximation.} Scoring in football and
+basketball happens through a sequence of discrete, roughly independent
+possessions, each contributing a small random point swing. By the
+functional Central Limit Theorem (Donsker's theorem), a sum of many small,
+roughly independent, roughly identically distributed increments converges
+to a Brownian motion as the number of increments grows. A game has enough
+possessions (order of 10--20 in the NFL, far more in the NBA) that this
+approximation is reasonable, though it is not exact -- see the limitations
+in Section 6.
+
+\subsection{Deriving the win probability formula}
+
+Fix the current time $t_0$ with current margin $m = M(t_0)$ and fraction of
+game remaining $\tau = \tau(t_0)$. The home team wins if and only if the
+\emph{final} margin $M_{\text{final}} = M(1) $ (using $\tau=0$ as the
+endpoint) is positive.
+
+By the model assumption, conditional on the current state,
+\[
+M_{\text{final}} \;\sim\; \mathcal{N}\!\big(m,\ \sigma^2 \tau\big).
+\]
+
+\begin{proposition}
+Under the above model,
+\[
+\mathbb{P}(\text{home wins} \mid m, \tau) = \Phi\!\left(\frac{m}{\sigma\sqrt{\tau}}\right)
+\]
+where $\Phi$ is the standard normal CDF.
+\end{proposition}
+
+\begin{proof}
+Standardize $M_{\text{final}}$: let $Z = \dfrac{M_{\text{final}} - m}{\sigma\sqrt{\tau}}$,
+so $Z \sim \mathcal{N}(0,1)$. Then
+\[
+\mathbb{P}(M_{\text{final}} > 0)
+= \mathbb{P}\!\left(Z > \frac{-m}{\sigma\sqrt{\tau}}\right)
+= 1 - \Phi\!\left(\frac{-m}{\sigma\sqrt{\tau}}\right)
+= \Phi\!\left(\frac{m}{\sigma\sqrt{\tau}}\right),
+\]
+using the symmetry of the standard normal distribution, $1-\Phi(-x) = \Phi(x)$.
+\end{proof}
+
+This is the entire model implemented in \texttt{stern\_model.py}. Two
+sanity checks confirm it behaves correctly:
+\begin{itemize}
+\item As $\tau \to 0$ (end of game) with $m \ne 0$: $\dfrac{m}{\sigma\sqrt{\tau}} \to \pm\infty$,
+so the probability collapses to 0 or 1 -- correct, since the outcome is
+essentially decided once the clock runs out.
+\item At $\tau = 1$ (kickoff) with $m = 0$: the probability is exactly
+$\Phi(0) = 0.5$ -- correct, an untied prior with no score yet should be a
+coin flip \emph{if we ignore the pre-game Elo information}. In practice we
+blend in the Elo prior most strongly when $\tau$ is close to 1, precisely
+because the pure score-based signal is uninformative there (see
+\texttt{stern\_model.py}, \texttt{blend\_weight} parameter).
+\end{itemize}
+
+\subsection{Connection to first-passage / hitting-time problems}
+
+An equivalent way to view this result: the home team loses if and only if
+$M(t)$ hits the barrier at $0$ from above before the clock expires (once
+trailing, ties are possible but let's set aside the discreteness). This
+frames the win probability as a \emph{hitting probability} for Brownian
+motion against a fixed barrier, a standard object in stochastic calculus
+that also underlies barrier option pricing in the Black-Scholes framework.
+The techniques are the same family used to price knock-in/knock-out
+options; this project is a discrete-outcome, sports-flavored version of
+the exact same mathematics.
+
+\section{Calibrating $\sigma$}
+
+$\sigma$ is the only free parameter in the model, and it must be estimated
+from historical data before the model can be used. Rearranging the model
+assumption:
+\[
+Y := M_{\text{final}} - M(t_0) \;\sim\; \mathcal{N}(0,\ \sigma^2 \tau)
+\quad\Longrightarrow\quad
+\frac{Y}{\sqrt{\tau}} \sim \mathcal{N}(0, \sigma^2)
+\]
+regardless of $\tau$. So, pooling every (game, snapshot) pair across
+historical data, the sample variance of $Y/\sqrt{\tau}$ is a consistent
+estimator of $\sigma^2$:
+\[
+\hat{\sigma}^2 = \widehat{\mathrm{Var}}\!\left(\frac{Y}{\sqrt{\tau}}\right)
+= \frac{1}{n-1}\sum_{i=1}^n \left(\frac{y_i}{\sqrt{\tau_i}} - \bar{y/\sqrt{\tau}}\right)^2.
+\]
+This is simple method-of-moments estimation (implemented in
+\texttt{fit\_sigma.py}) -- no maximum likelihood machinery is required
+because the model assumption directly gives us a quantity with constant
+variance to estimate.
+
+\section{Measuring model quality: calibration and the Brier score}
+
+A probabilistic forecast is \textbf{calibrated} if, among all the times the
+model says ``probability $p$'', the event actually happens a fraction $p$
+of the time. Formally, binning predictions into buckets $B_k$ and checking
+\[
+\frac{1}{|B_k|}\sum_{i \in B_k} \mathbf{1}[\text{home won}_i] \;\approx\; \bar{p}_{B_k}
+\]
+for every bucket $k$ is exactly the reliability diagram produced in
+\texttt{calibration.py}.
+
+A complementary scalar summary is the \textbf{Brier score}, the mean
+squared error between predicted probability and the binary outcome:
+\[
+\text{Brier} = \frac{1}{n}\sum_{i=1}^n (p_i - o_i)^2, \qquad o_i \in \{0,1\}.
+\]
+It is minimized (in expectation) exactly when $p_i$ equals the true
+probability of the event, which is why it is a \emph{proper scoring rule}:
+a forecaster cannot improve their expected score by reporting anything
+other than their honest belief. A constant 0.5 forecast scores 0.25; our
+backtest on simulated data (Section 7) scores well below that.
+
+\section{From edge to position size: the Kelly criterion}
+
+Suppose the model believes $\mathbb{P}(E) = p$, but the market prices a YES
+contract at $q$ dollars (so a NO-side profit of $q$ per contract if $E$
+does not occur, and a YES-side profit of $1-q$ per contract if it does).
+If we stake a fraction $f$ of our bankroll $W$ on YES, our bankroll after
+the outcome is either
+\[
+W(1 + f\cdot b) \quad \text{(win, probability } p), \qquad
+W(1 - f) \quad \text{(lose, probability } 1-p)
+\]
+where $b = \dfrac{1-q}{q}$ is the net odds per dollar staked. Kelly's
+criterion chooses $f$ to maximize the expected log bankroll growth rate:
+\[
+g(f) = p\ln(1+fb) + (1-p)\ln(1-f).
+\]
+Differentiating and setting $g'(f) = 0$:
+\[
+g'(f) = \frac{pb}{1+fb} - \frac{1-p}{1-f} = 0
+\quad\Longrightarrow\quad
+f^\ast = \frac{pb - (1-p)}{b} = \frac{p(1+b)-1}{b}.
+\]
+This is the formula implemented in \texttt{kelly.py}. Two practical notes:
+
+\begin{itemize}
+\item \textbf{Fractional Kelly.} $f^\ast$ assumes $p$ is known exactly.
+Since $p$ is really $p_{\text{model}}$, a noisy estimate, we stake only a
+fraction (e.g. one quarter) of $f^\ast$ to reduce the damage from model
+error -- a standard, well-justified adjustment in practice.
+\item \textbf{Slippage.} The formula above uses the quoted price $q$, but
+real fills are worse than the quote for any nonzero size. \texttt{kelly.py}
+haircuts $q$ by a fixed number of cents before computing $f^\ast$ as a
+simple, conservative correction.
+\end{itemize}
+
+\section{Empirical validation on simulated data}
+
+Before trusting this pipeline on real data, we validate it on data
+simulated directly from the model's own assumptions (implemented in
+\texttt{generate\_mock\_data.py}): margin paths are literally simulated as
+Brownian motion with a known $\sigma = 13.5$. This is a standard sanity
+check in quantitative work: if the estimation and backtesting code cannot
+recover known ground truth from data generated by the model itself,
+there is a bug, full stop.
+
+\textbf{Result.} Fitting $\sigma$ on $300$ simulated games ($4{,}500$
+snapshots) recovered $\hat\sigma = 13.54$, against a true value of $13.5$.
+The resulting calibration plot (Figure~\ref{fig:calib}) shows predicted and
+realized win rates closely tracking the 45-degree line across all
+probability buckets, and the backtest Brier score was $0.157$, well below
+the $0.25$ coin-flip baseline.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.65\textwidth]{../output/calibration_plot.png}
+\caption{Reliability diagram on simulated data. Point size reflects the
+number of observations in each probability bucket.}
+\label{fig:calib}
+\end{figure}
+
+This confirms the pipeline is implemented correctly. The next step (see
+README) is to re-run the same pipeline on real historical play-by-play
+data, where $\hat\sigma$ and the calibration plot will reflect genuine
+model error rather than pure estimation noise -- that gap between
+``clean-data calibration'' and ``real-data calibration'' is itself an
+informative measurement of how good the Brownian-motion approximation
+actually is for real games.
+
+\section{Limitations and honest caveats}
+
+\begin{itemize}
+\item \textbf{Constant $\sigma$.} Real scoring volatility is not constant
+across a game -- end-of-game situations (intentional fouling in
+basketball, clock management in football) systematically distort the
+simple driftless-Brownian-motion picture. A natural extension is to fit
+$\sigma(\tau)$ as a function of time remaining rather than a single
+constant.
+\item \textbf{No drift term.} We assumed zero drift in the in-game model,
+folding all pre-game strength information into the Elo prior instead.
+An alternative model could carry a drift term through the whole game.
+\item \textbf{Discreteness.} Brownian motion is continuous, but football
+and basketball scores jump in increments of 2, 3, 6, 7, or 8 points. The
+approximation is reasonable away from the very end of the game but breaks
+down near a tied score with little time left, where exact possession-based
+models (Markov chains over game states) do better.
+\item \textbf{Market microstructure.} We compare our model probability to
+Kalshi's last traded price, but real execution faces a bid-ask spread and
+thin order books; the Kelly sizing in \texttt{kelly.py} includes only a
+simple slippage haircut, not a full market-impact model.
+\end{itemize}
+
+\end{document}

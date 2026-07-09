@@ -1,0 +1,9 @@
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+matplotlib>=3.7
+requests>=2.31
+python-dotenv>=1.0
+pyyaml>=6.0
+# optional, for pulling real NFL data:
+# nfl_data_py>=0.3
